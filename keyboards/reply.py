@@ -22,4 +22,4 @@ def get_manager_keyboard(username: str) -> ReplyKeyboardMarkup:
         keyboard=[[KeyboardButton(text=f"Принять чат с {username}")]],
         resize_keyboard=True
     )
-    return keyboard
+    return keyboard 

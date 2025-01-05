@@ -1,7 +1,7 @@
 from aiogram import types, Bot
 from aiogram.filters import Command
 from database import Database
-from keyboards import get_main_keyboard, get_chat_keyboard
+from keyboards import get_main_keyboard, get_chat_keyboard, get_manager_keyboard
 
 async def handle_start(message: types.Message):
     await message.answer(
@@ -28,7 +28,6 @@ async def handle_support_request(message: types.Message, bot: Bot, db: Database,
     )
 
     # Уведомляем менеджера
-    from keyboards import get_manager_keyboard
     await bot.send_message(
         manager_id,
         f"Новый запрос от клиента @{username}: нажмите 'Принять чат', чтобы начать общение.",
