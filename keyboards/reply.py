@@ -22,10 +22,10 @@ def get_cities_keyboard(cities: list[str]) -> ReplyKeyboardMarkup:
         if i + 1 < len(cities):  # Проверяем, есть ли второй город для строки
             row.append(KeyboardButton(text=cities[i + 1]))
         keyboard.append(row)
-    
+
     # Добавляем кнопку "Назад" отдельной строкой
     keyboard.append([KeyboardButton(text="Назад")])
-    
+
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
@@ -55,8 +55,8 @@ def get_streets_keyboard(streets: list[str]) -> ReplyKeyboardMarkup:
         if i + 1 < len(streets):  # Проверяем, есть ли вторая улица для строки
             row.append(KeyboardButton(text=streets[i + 1]))
         keyboard.append(row)
-    
+
     # Добавляем кнопку "Назад к городам" отдельной строкой
     keyboard.append([KeyboardButton(text="Назад к городам")])
-    
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True) 
+
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)

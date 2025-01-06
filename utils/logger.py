@@ -3,6 +3,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from datetime import datetime
 
+
 def setup_logger():
     # Создаем директорию для логов, если её нет
     if not os.path.exists('logs'):
@@ -29,4 +30,5 @@ def setup_logger():
 
     return logger
 
-logger = setup_logger() 
+
+logger = setup_logger()

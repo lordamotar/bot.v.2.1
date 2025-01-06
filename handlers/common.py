@@ -2,16 +2,17 @@ from aiogram import types, Bot
 from database import Database
 from keyboards import get_main_keyboard
 
+
 async def handle_close_chat(message: types.Message, bot: Bot, db: Database, manager_id: int):
     user_id = message.from_user.id
-    
+
     # Если это менеджер, найдем активный чат с клиентом
     if user_id == manager_id:
         active_chat = db.get_active_chat(user_id)
         if active_chat:
             client_id = active_chat[0]  # client_id из БД
             db.close_chat(client_id)
-            
+
             # Уведомляем клиента
             await bot.send_message(
                 client_id,
@@ -36,9 +37,10 @@ async def handle_close_chat(message: types.Message, bot: Bot, db: Database, mana
                 reply_markup=get_main_keyboard()
             )
 
+
 async def handle_message(message: types.Message, bot: Bot, db: Database, manager_id: int):
     user_id = message.from_user.id
-    
+
     if user_id == manager_id:
         # Если пишет менеджер, найдем активный чат
         active_chat = db.get_active_chat(manager_id)
