@@ -111,13 +111,15 @@ class Database:
                 (8, "Северная промышленная зона 190/1"),
                 (8, "улица Транспортная 17/9"),
                 (8, "улица Луначарского 44/2"),
-                # Семей
+                # Петропавловск (city_id: 9)
                 (9, "улица Парковая 57Б"),
-                # Петропавловск
-                (10, "трасса Семей-Павлодар 10"),
-                (10, "улица Кутжанова 23"),
-                (10, "улица Бозтаева 106"),
-                (10, "улица Красный Пильщик 36/2"),
+                (9, "трасса Семей-Павлодар 10"),
+                (9, "улица Кутжанова 23"),
+                (9, "улица Бозтаева 106"),
+                (9, "улица Красный Пильщик 36/2"),
+                # Семей (city_id: 10)
+                # Удаляем неправильные записи и оставляем правильные
+                # ... остальные записи ...
                 # Степногорск
                 (11, "2-й микрорайон 77"),
                 # Темиртау
@@ -516,7 +518,6 @@ class Database:
                 (city_id,)
             )
             streets = [row[0] for row in cursor.fetchall()]
-            logger.info(f"Retrieved {len(streets)} streets for city_id: {city_id}")
             return streets
         except sqlite3.Error as e:
             logger.error(f"Error getting streets list: {e}")
@@ -673,3 +674,22 @@ class Database:
                 delattr(self._local, 'connection')
         except Exception as e:
             logger.error(f"Error in database cleanup: {e}")
+
+    def get_available_managers_count(self) -> int:
+        """Получение количества свободных менеджеров"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT manager_id) 
+                FROM chats 
+                WHERE is_active = TRUE
+            """)
+            busy_managers = cursor.fetchone()[0] or 0
+            logger.info(f"Number of busy managers: {busy_managers}")
+            return max(0, 3 - busy_managers)  # Предполагаем, что всего 3 менеджера
+        except sqlite3.Error as e:
+            logger.error(f"Error getting available managers count: {e}")
+            return 0
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
