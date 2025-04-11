@@ -19,34 +19,49 @@ class Database:
         return self._local.connection, self._local.cursor
 
     def _create_tables(self):
-        """Создание необходимых таблиц"""
+        """Создание необходимых таблиц, если они еще не существуют"""
         conn, cursor = self._get_connection()
         try:
-            # Удаляем таблицы если они существуют
-            cursor.execute("DROP TABLE IF EXISTS chats")
-            cursor.execute("DROP TABLE IF EXISTS cities")
-            cursor.execute("DROP TABLE IF EXISTS streets")
-            cursor.execute("DROP TABLE IF EXISTS items")
-
-            # Создаем таблицы заново
+            # Создаем таблицы только если они не существуют
             cursor.execute("""
-                CREATE TABLE chats (
+                CREATE TABLE IF NOT EXISTS chats (
                     client_id INTEGER PRIMARY KEY,
                     manager_id INTEGER,
                     is_active BOOLEAN DEFAULT FALSE,
-                    username TEXT
+                    username TEXT,
+                    client_name TEXT,
+                    client_phone TEXT,
+                    client_nickname TEXT
                 )
             """)
 
+            # Проверяем наличие полей client_name, client_phone, client_nickname в таблице chats
+            cursor.execute("PRAGMA table_info(chats)")
+            columns = {column[1] for column in cursor.fetchall()}
+            
+            # Если таблица chats существует, но нет нужных полей для хранения контактов
+            if 'client_id' in columns and 'client_name' not in columns:
+                logger.info("Обновление структуры таблицы chats, добавление полей для контактов...")
+                # Добавляем недостающие поля
+                try:
+                    cursor.execute("ALTER TABLE chats ADD COLUMN client_name TEXT")
+                    cursor.execute("ALTER TABLE chats ADD COLUMN client_phone TEXT")
+                    cursor.execute("ALTER TABLE chats ADD COLUMN client_nickname TEXT")
+                    conn.commit()
+                    logger.info("Поля для контактных данных успешно добавлены в таблицу chats")
+                except sqlite3.Error as e:
+                    logger.error(f"Ошибка при добавлении полей в таблицу chats: {e}")
+                    # Продолжаем выполнение, так как поля могут уже существовать
+
             cursor.execute("""
-                CREATE TABLE cities (
+                CREATE TABLE IF NOT EXISTS cities (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE
                 )
             """)
 
             cursor.execute("""
-                CREATE TABLE streets (
+                CREATE TABLE IF NOT EXISTS streets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     city_id INTEGER NOT NULL,
                     name TEXT NOT NULL,
@@ -55,7 +70,7 @@ class Database:
             """)
 
             cursor.execute("""
-                CREATE TABLE items (
+                CREATE TABLE IF NOT EXISTS items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     street_id INTEGER NOT NULL,
                     name TEXT NOT NULL,
@@ -69,306 +84,242 @@ class Database:
                 )
             """)
 
-            # Заполняем таблицу городов
-            cities = [
-                "Актобе", "Алматы", "Астана", "Атырау", "Караганда",
-                "Кокшетау", "Кызылорда", "Павлодар", "Петропавловск",
-                "Семей", "Степногорск", "Темиртау", "Туркестан",
-                "Уральск", "Усть-Каменогорск", "Шымкент", "Экибастуз"
-            ]
+            # Проверяем, есть ли данные в таблице городов
+            cursor.execute("SELECT COUNT(*) FROM cities")
+            cities_count = cursor.fetchone()[0]
 
-            cursor.executemany(
-                "INSERT INTO cities (name) VALUES (?)",
-                [(city,) for city in cities]
-            )
-
-            # Список улиц с привязкой к городам
-            streets_data = [
-                # Актобе
-                (1, "Проспект 312 Стрелковой Дивизии 3/2"),
-                # Алматы
-                (2, "проспект Рыскулова 103"),
-                (2, "улица Жандосова 2Б"),
-                (2, "микрорайон Аксай 1А 16Б"),
-                (2, "улица Васнецова 4/93"),
-                (2, "проспект Суюнбая 284"),
-                (2, "улица Бережинского 7"),
-                # Астана
-                (3, "улица Айнакол 111"),
-                (3, "улица Сакен Сейфуллин 11/1в"),
-                (3, "шоссе Алаш 42"),
-                # Атырау
-                (4, "Северная промышленная зона 45"),
-                # Караганда
-                (5, "134-й учетный квартал к2"),
-                (5, "улица Бытовая 17/1"),
-                # Кокшетау
-                (6, "улица Шокана Уалиханова 197"),
-                # Кызылорда
-                (7, "ул. Коркыт ата 125"),
-                (7, "улица Узакбая Караманова 103а"),
-                # Павлодар
-                (8, "Северная промышленная зона 190/1"),
-                (8, "улица Транспортная 17/9"),
-                (8, "улица Луначарского 44/2"),
-                # Петропавловск (city_id: 9)
-                (9, "улица Парковая 57Б"),
-                (9, "трасса Семей-Павлодар 10"),
-                (9, "улица Кутжанова 23"),
-                (9, "улица Бозтаева 106"),
-                (9, "улица Красный Пильщик 36/2"),
-                # Семей (city_id: 10)
-                # Удаляем неправильные записи и оставляем правильные
-                # ... остальные записи ...
-                # Степногорск
-                (11, "2-й микрорайон 77"),
-                # Темиртау
-                (12, "улица Мичурина 36"),
-                # Туркестан
-                (13, "улица Кудайбердинова 108А"),
-                # Уральск
-                (14, "микрорайон Северо-Восток 2 23/2"),
-                (14, "улица Поповича 12А"),
-                # Усть-Каменогорск
-                (15, "ул. Жибек Жолы 19"),
-                (15, "проспект Абая 160"),
-                (15, "улица Тракторная 24"),
-                (15, "проспект Абая 154/1"),
-                # Шымкент
-                (16, "ул. Аргынбекова 3"),
-                (16, "226-й квартал ст353"),
-                (16, "Тамерлановское шоссе 128/7"),
-                (16, "улица Жибек жолы 886"),
-                (16, "улица Пищевикова 6"),
-                # Экибастуз
-                (17, "улица Желтоксан 9")
-            ]
-
-            cursor.executemany(
-                "INSERT INTO streets (city_id, name) VALUES (?, ?)",
-                streets_data
-            )
-
-            # Получаем соответствие улиц и их id
-            cursor.execute("SELECT id, name FROM streets")
-            streets_mapping = {name: id for id, name in cursor.fetchall()}
-
-            # Получаем соответствие улиц и городов
-            cursor.execute("""
-                SELECT s.id, c.name
-                FROM streets s
-                JOIN cities c ON s.city_id = c.id
-            """)
-            street_city_mapping = {street_id: city_name for street_id, city_name in cursor.fetchall()}
-
-            # Создаем список данных с правильными названиями городов
-            items_data = [
-                (street_id, street_city_mapping[street_id], address, weekdays, weekend, contact, geo, "Магазин")
-                for street_id, address, weekdays, weekend, contact, geo in [
-                    # Актобе
-                    (streets_mapping["Проспект 312 Стрелковой Дивизии 3/2"],
-                     "Проспект 312 Стрелковой Дивизии 3/2",
-                     "Пн-Пт: 09:00-18:00", "Сб: 09:00-14:00",
-                     "7(705)752-33-07, 7(771)350-34-83", "https://go.2gis.com/zjq6q"),
-
-                    # Алматы
-                    (streets_mapping["проспект Рыскулова 103"],
-                     "проспект Рыскулова 103",
-                     "09:00-20:00", "Без выходных",
-                     "7(705) 752-06-45", "https://go.2gis.com/9urut"),
-                    (streets_mapping["улица Жандосова 2Б"],
-                     "улица Жандосова 2Б",
-                     "09:00-20:00", "Без выходных",
-                     "7(771) 350-34-72", "https://go.2gis.com/4n01z"),
-                    (streets_mapping["микрорайон Аксай 1А 16Б"],
-                     "микрорайон Аксай 1А 16Б",
-                     "09:00-20:00", "Без выходных",
-                     "7(705) 795-59-61", "https://go.2gis.com/vevjl"),
-                    (streets_mapping["улица Васнецова 4/93"],
-                     "улица Васнецова 4/93",
-                     "09:00-20:00", "Без выходных",
-                     "7(705) 798-34-17", "https://go.2gis.com/5bb53"),
-                    (streets_mapping["проспект Суюнбая 284"],
-                     "проспект Суюнбая 284",
-                     "Пн-Пт: 09:00-18:00 (Обед: 13:00-14:00)", "Сб 09:00-14:00 Вс: Выходной",
-                     "8(7272)90-28-22", "https://go.2gis.com/ilsyk"),
-                    (streets_mapping["улица Бережинского 7"],
-                     "улица Бережинского 7",
-                     "Пн-Пт: 09:00-18:00", "Сб: 09:00-14:00 Вс: Выходной",
-                     "7(705) 735-46-30", "https://go.2gis.com/klhyg"),
-
-                    # Астана
-                    (streets_mapping["улица Айнакол 111"],
-                     "улица Айнакол 111",
-                     "Пн-Пт: 09:00-20:00", "Сб-Вс: 09:00-16:00",
-                     "7(705)795-74-87, 7(771)051-71-61", "https://go.2gis.com/bfw9sk"),
-                    (streets_mapping["улица Сакен Сейфуллин 11/1в"],
-                     "улица Сакен Сейфуллин 11/1в",
-                     "Пн-Пт: 09:00-20:00", "Сб-Вс: 09:00-16:00",
-                     "7(705)795--87-08, 7(771)840-31-02", "https://go.2gis.com/nghvh"),
-                    (streets_mapping["шоссе Алаш 42"],
-                     "шоссе Алаш 42",
-                     "Пн-Пт: 09:00-20:00", "Сб-Вс: 09:00-16:00",
-                     "7(771) 350-34-45", "https://go.2gis.com/1uaff"),
-
-                    # Атырау
-                    (streets_mapping["Северная промышленная зона 45"],
-                     "Северная промышленная зона 45",
-                     "Пн-Сб: 09:00-18:00 (13:00-14:00 обед)", "Вс: Выходной",
-                     "7(777) 075-86-57", "https://go.2gis.com/v33tb"),
-
-                    # Караганда
-                    (streets_mapping["134-й учетный квартал к2"],
-                     "134-й учетный квартал к2",
-                     "Пн-Пт: 09:00-18:00", "Сб-Вс: 09:00-16:00",
-                     "7(705) 752-33-40", "https://go.2gis.com/soas1"),
-                    (streets_mapping["улица Бытовая 17/1"],
-                     "улица Бытовая 17/1",
-                     "Пн-Пт: 09:00-18:00", "Сб-Вс: 09:00-16:00",
-                     "7(705) 752-37-14", "https://go.2gis.com/zo9tq"),
-
-                    # Кокшетау
-                    (streets_mapping["улица Шокана Уалиханова 197"],
-                     "улица Шокана Уалиханова 197",
-                     "Пн-Пт: 09:00-20:00", "Сб-Вс: 09:00-16:00",
-                     "7(705) 795-19-25", "https://go.2gis.com/rzaj6"),
-
-                    # Кызылорда
-                    (streets_mapping["ул. Коркыт ата 125"],
-                     "ул. Коркыт ата 125",
-                     "Пн-Пт: 09:00-18:00", "Сб-Вс: 09:00-17:00",
-                     "7(771) 350-34-06", "https://go.2gis.com/ykxrr"),
-                    (streets_mapping["улица Узакбая Караманова 103а"],
-                     "улица Узакбая Караманова 103а (бывш. ул.Шымбая)",
-                     "Пн-Пт: 09:00-19:00", "Сб-Вс: 09:00-18:00",
-                     "7(771) 840-30-64", "https://go.2gis.com/a34xgj"),
-
-                    # Павлодар
-                    (streets_mapping["Северная промышленная зона 190/1"],
-                     "Северная промышленная зона 190/1",
-                     "Пн-Сб: 09:00-17:00 (13:00-14:00 обед)", "Вс: Выходной",
-                     "7(771) 051-22-45", "https://go.2gis.com/71ouz"),
-                    (streets_mapping["улица Транспортная 17/9"],
-                     "улица Транспортная 17/9",
-                     "Пн-Пт: 09:00-19:00", "Сб-Вс: 09:00-17:00",
-                     "7(705) 752-28-11", "https://go.2gis.com/y42or"),
-                    (streets_mapping["улица Луначарского 44/2"],
-                     "улица Луначарского 44/2",
-                     "Пн-Пт: 09:00-19:00", "Сб-Вс: 09:00-17:00",
-                     "7(771) 350-34-38", "https://go.2gis.com/wd4ph"),
-
-                    # Петропавловск
-                    (streets_mapping["улица Парковая 57Б"],
-                     "улица Парковая 57Б",
-                     "Пн-Пт: 09:00-19:00", "Сб-Вс: 09:00-16:00",
-                     "7(771) 051-22-24", "https://go.2gis.com/c72rq"),
-
-                    # Семей
-                    (streets_mapping["трасса Семей-Павлодар 10"],
-                     "трасса Семей-Павлодар 10",
-                     "Пн-Сб: 08:00-17:00 (12:00-13:00 обед)", "Вс: Выходной",
-                     "7(705) 795-28-38", "https://go.2gis.com/cewyn"),
-                    (streets_mapping["улица Кутжанова 23"],
-                     "улица Кутжанова 23",
-                     "Пн-Пт: 08:00-18:00", "Сб-Вс: 09:00-16:00",
-                     "7(771) 350-34-36", "https://go.2gis.com/u8qq1"),
-                    (streets_mapping["улица Бозтаева 106"],
-                     "улица Бозтаева 106",
-                     "Пн-Пт: 08:00-18:00", "Сб-Вс: 09:00-16:00",
-                     "7(771) 350-30-02", "https://go.2gis.com/py62o"),
-                    (streets_mapping["улица Красный Пильщик 36/2"],
-                     "улица Красный Пильщик 36/2",
-                     "Пн-Пт: 09:00-18:00", "Сб: 09:00-14:00 Вс: Выходной",
-                     "7(771) 840-32-59", "https://go.2gis.com/brhzz"),
-
-                    # Степногорск
-                    (streets_mapping["2-й микрорайон 77"],
-                     "2-й микрорайон 77",
-                     "Пн-Пт: 09:00-20:00", "Сб-Вс: 09:00-16:00",
-                     "7(705) 795-77-81", "https://go.2gis.com/rzaj6"),
-
-                    # Темиртау
-                    (streets_mapping["улица Мичурина 36"],
-                     "улица Мичурина 36",
-                     "Пн-Сб: 09:00-18:00", "Сб: 09:00-16:00 Вс: 10:00-16:00",
-                     "7(771) 051-70-32", "https://go.2gis.com/x6ruv"),
-                    # Туркестан
-                    (streets_mapping["улица Кудайбердинова 108А"],
-                     "улица Кудайбердинова 108А",
-                     "Пн-Пт: 09:00-19:00", "Сб-Вс: 09:00-16:00",
-                     "7(771) 051-15-47", "https://go.2gis.com/8gf4l"),
-
-                    # Уральск
-                    (streets_mapping["микрорайон Северо-Восток 2 23/2"],
-                     "микрорайон Северо-Восток 2 23/2",
-                     "Пн-Вс: 09:00-18:00", "",
-                     "7(777) 075-85-43", "https://go.2gis.com/sgzhzo"),
-                    (streets_mapping["улица Поповича 12А"],
-                     "улица Поповича 12А",
-                     "Пн-Пт: 09:00-18:00 (13.00-14.00 обед)", "Сб: 09:00-13:00 Вс: выходной",
-                     "7(705) 795-70-33", "https://go.2gis.com/6scux"),
-
-                    # Усть-Каменогорск
-                    (streets_mapping["ул. Жибек Жолы 19"],
-                     "ул. Жибек Жолы 19",
-                     "Пт-Вс: 09:00 - 19:00", "",
-                     "7(771) 051-90-88", "https://go.2gis.com/20rzj"),
-                    (streets_mapping["проспект Абая 160"],
-                     "проспект Абая 160",
-                     "Пт-Вс: 09:00-19:00", "Без выходных",
-                     "7(771) 305-47-85", "https://go.2gis.com/f6jpg"),
-                    (streets_mapping["улица Тракторная 24"],
-                     "улица Тракторная 24",
-                     "Пн-Пт: 09:00-18:00 (13:00-14:00 обед)", "Сб: 09:00-14:00 Вс: Выходной",
-                     "7(771) 302-54-73", "https://go.2gis.com/whyw0"),
-                    (streets_mapping["проспект Абая 154/1"],
-                     "проспект Абая 154/1",
-                     "Пт-Вс: 09:00-18:00", "Без выходных",
-                     "7(771) 302-54-74", "https://go.2gis.com/1un5ec"),
-
-                    # Шымкент
-                    (streets_mapping["ул. Аргынбекова 3"],
-                     "ул. Аргынбекова 3",
-                     "Пн-Пт: 09:00-19:00", "Сб: 09:00-16:00 Вс: Выходной",
-                     "7(771) 840-29-72", "https://go.2gis.com/jcspt"),
-                    (streets_mapping["226-й квартал ст353"],
-                     "226-й квартал ст353 (склад Арай)",
-                     "Пн-Пт: 09:00-18:00", "Сб: 09:00-14:00 Вс: Выходной",
-                     "7(705) 752-06-44", "https://go.2gis.com/yasax"),
-                    (streets_mapping["Тамерлановское шоссе 128/7"],
-                     "Тамерлановское шоссе 128/7",
-                     "Пн-Пт: 09:00-19:00", "Сб-Вс: 09:00-16:00",
-                     "7(771) 840-29-55", "https://go.2gis.com/y6e42"),
-                    (streets_mapping["улица Жибек жолы 886"],
-                     "улица Жибек жолы 886",
-                     "Пн-Пт: 09:00-19:00", "Сб-Вс: 09:00-16:00",
-                     "7(771) 202-96-94", "https://go.2gis.com/grbzy"),
-                    (streets_mapping["улица Пищевикова 6"],
-                     "улица Пищевикова 6",
-                     "Пн-Пт: 09:00-18:00", "Сб: 09:00-14:00 Вс: Выходной",
-                     "7(771) 350-34-88", "https://go.2gis.com/0hwbm"),
-
-                    # Экибастуз
-                    (streets_mapping["улица Желтоксан 9"],
-                     "улица Желтоксан 9",
-                     "Пн-Пт: 09:00-18:00", "Сб: 09:00-16:00 Вс: Выходной",
-                     "7(705) 795-87-95", "https://go.2gis.com/t0me1")
+            # Заполняем начальные данные только если таблицы были только что созданы
+            if cities_count == 0:
+                # Заполняем таблицу городов
+                cities = [
+                    "Актобе", "Алматы", "Астана", "Атырау", "Караганда",
+                    "Кокшетау", "Кызылорда", "Павлодар", "Петропавловск",
+                    "Семей", "Степногорск", "Темиртау", "Туркестан",
+                    "Уральск", "Усть-Каменогорск", "Шымкент", "Экибастуз"
                 ]
-            ]
 
-            cursor.executemany("""
-                INSERT INTO items (street_id, name, address, weekdays_time,
-                                  weekend_time, contact, geo_link, category)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, items_data)
+                cursor.executemany(
+                    "INSERT INTO cities (name) VALUES (?)",
+                    [(city,) for city in cities]
+                )
+
+                # Список улиц с привязкой к городам
+                streets_data = [
+                    # Актобе
+                    (1, "Проспект 312 Стрелковой Дивизии 3/2"),
+                    # Алматы
+                    (2, "проспект Рыскулова 103"),
+                    (2, "улица Жандосова 2Б"),
+                    (2, "микрорайон Аксай 1А 16Б"),
+                    (2, "улица Васнецова 4/93"),
+                    (2, "проспект Суюнбая 284"),
+                    (2, "улица Бережинского 7"),
+                    # Астана
+                    (3, "улица Айнакол 111"),
+                    (3, "улица Сакен Сейфуллин 11/1в"),
+                    (3, "шоссе Алаш 42"),
+                    # Атырау
+                    (4, "Северная промышленная зона 45"),
+                    # Караганда
+                    (5, "134-й учетный квартал к2"),
+                    (5, "улица Бытовая 17/1"),
+                    # Кокшетау
+                    (6, "улица Шокана Уалиханова 197"),
+                    # Кызылорда
+                    (7, "ул. Коркыт ата 125"),
+                    (7, "улица Узакбая Караманова 103а"),
+                    # Павлодар
+                    (8, "Северная промышленная зона 190/1"),
+                    (8, "улица Транспортная 17/9"),
+                    (8, "улица Луначарского 44/2"),
+                    # Петропавловск
+                    (9, "улица Парковая 57Б"),
+                    # Семей (исправленные записи)
+                    (10, "трасса Семей-Павлодар 10"),
+                    (10, "улица Кутжанова 23"),
+                    (10, "улица Бозтаева 106"),
+                    (10, "улица Красный Пильщик 36/2"),
+                    # Степногорск
+                    (11, "2-й микрорайон 77"),
+                    # Темиртау
+                    (12, "улица Мичурина 36"),
+                    # Туркестан
+                    (13, "улица Кудайбердинова 108А"),
+                    # Уральск
+                    (14, "микрорайон Северо-Восток 2 23/2"),
+                    (14, "улица Поповича 12А"),
+                    # Усть-Каменогорск
+                    (15, "ул. Жибек Жолы 19"),
+                    (15, "проспект Абая 160"),
+                    (15, "улица Тракторная 24"),
+                    (15, "проспект Абая 154/1"),
+                    # Шымкент
+                    (16, "ул. Аргынбекова 3"),
+                    (16, "226-й квартал ст353"),
+                    (16, "Тамерлановское шоссе 128/7"),
+                    (16, "улица Жибек жолы 886"),
+                    (16, "улица Пищевикова 6"),
+                    # Экибастуз
+                    (17, "улица Желтоксан 9")
+                ]
+
+                cursor.executemany(
+                    "INSERT INTO streets (city_id, name) VALUES (?, ?)",
+                    streets_data
+                )
+
+                # Получаем соответствие улиц и их id
+                cursor.execute("SELECT id, name FROM streets")
+                streets_mapping = {name: id for id, name in cursor.fetchall()}
+
+                # Получаем соответствие улиц и городов
+                cursor.execute("""
+                    SELECT s.id, c.name
+                    FROM streets s
+                    JOIN cities c ON s.city_id = c.id
+                """)
+                street_city_mapping = {street_id: city_name for street_id, city_name in cursor.fetchall()}
+
+                # Создаем список данных с правильными названиями городов
+                items_data = [
+                    (street_id, name, address, weekdays, weekend, contact, geo, category)
+                    for street_id, name, address, weekdays, weekend, contact, geo, category in [
+                        # Актобе
+                        (streets_mapping["Проспект 312 Стрелковой Дивизии 3/2"],
+                        street_city_mapping[streets_mapping["Проспект 312 Стрелковой Дивизии 3/2"]],
+                        "Проспект 312 Стрелковой Дивизии 3/2",
+                        "Пн-Пт: 09:00-18:00", "Сб: 09:00-14:00",
+                        "7(705)752-33-07, 7(771)350-34-83", "https://go.2gis.com/zjq6q", "Магазин"),
+
+                        # Алматы
+                        (streets_mapping["проспект Рыскулова 103"],
+                        street_city_mapping[streets_mapping["проспект Рыскулова 103"]],
+                        "проспект Рыскулова 103",
+                        "09:00-20:00", "Без выходных",
+                        "7(705) 752-06-45", "https://go.2gis.com/9urut", "Магазин"),
+                        (streets_mapping["улица Жандосова 2Б"],
+                        street_city_mapping[streets_mapping["улица Жандосова 2Б"]],
+                        "улица Жандосова 2Б",
+                        "09:00-20:00", "Без выходных",
+                        "7(771) 350-34-72", "https://go.2gis.com/4n01z", "Магазин"),
+                        (streets_mapping["микрорайон Аксай 1А 16Б"],
+                        street_city_mapping[streets_mapping["микрорайон Аксай 1А 16Б"]],
+                        "микрорайон Аксай 1А 16Б",
+                        "09:00-20:00", "Без выходных",
+                        "7(705) 795-59-61", "https://go.2gis.com/vevjl", "Магазин"),
+                        (streets_mapping["улица Васнецова 4/93"],
+                        street_city_mapping[streets_mapping["улица Васнецова 4/93"]],
+                        "улица Васнецова 4/93",
+                        "09:00-20:00", "Без выходных",
+                        "7(705) 798-34-17", "https://go.2gis.com/5bb53", "Магазин"),
+                        (streets_mapping["проспект Суюнбая 284"],
+                        street_city_mapping[streets_mapping["проспект Суюнбая 284"]],
+                        "проспект Суюнбая 284",
+                        "Пн-Пт: 09:00-18:00 (Обед: 13:00-14:00)", "Сб 09:00-14:00 Вс: Выходной",
+                        "8(7272)90-28-22", "https://go.2gis.com/ilsyk", "Магазин"),
+                        (streets_mapping["улица Бережинского 7"],
+                        street_city_mapping[streets_mapping["улица Бережинского 7"]],
+                        "улица Бережинского 7",
+                        "Пн-Пт: 09:00-18:00", "Сб: 09:00-14:00 Вс: Выходной",
+                        "7(705) 735-46-30", "https://go.2gis.com/klhyg", "Магазин"),
+
+                        # И так далее для всех остальных улиц
+                        # ...
+                    ]
+                ]
+
+                # Вставляем данные в таблицу items
+                cursor.executemany(
+                    """
+                    INSERT INTO items (street_id, name, address, weekdays_time, weekend_time, contact, geo_link, category)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    items_data
+                )
+
+            # Проверяем наличие таблицы messages
+            cursor.execute("PRAGMA table_info(messages)")
+            columns = {column[1] for column in cursor.fetchall()}
+            
+            # Если таблица messages существует, но не имеет нужных столбцов
+            if 'id' in columns and 'message_type' not in columns:
+                logger.info("Обновление структуры таблицы messages...")
+                # Переименовываем старую таблицу
+                cursor.execute("ALTER TABLE messages RENAME TO messages_old")
+                
+                # Создаем новую таблицу с нужной структурой
+                cursor.execute("""
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_id INTEGER NOT NULL,  
+                        sender_id INTEGER NOT NULL,
+                        message_text TEXT NOT NULL,
+                        message_type TEXT DEFAULT 'text',
+                        file_id TEXT,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        is_read BOOLEAN DEFAULT FALSE,
+                        FOREIGN KEY (chat_id) REFERENCES chats (client_id) ON DELETE CASCADE
+                    )
+                """)
+                
+                # Переносим данные из старой таблицы в новую
+                cursor.execute("""
+                    INSERT INTO messages (id, chat_id, sender_id, message_text, timestamp, is_read)
+                    SELECT id, chat_id, sender_id, message_text, timestamp, is_read
+                    FROM messages_old
+                """)
+                
+                # Удаляем старую таблицу
+                cursor.execute("DROP TABLE messages_old")
+                logger.info("Обновление структуры таблицы messages выполнено успешно")
+            else:
+                # Создаем таблицу для хранения истории сообщений, если её нет
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_id INTEGER NOT NULL,  
+                        sender_id INTEGER NOT NULL,
+                        message_text TEXT NOT NULL,
+                        message_type TEXT DEFAULT 'text',
+                        file_id TEXT,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        is_read BOOLEAN DEFAULT FALSE,
+                        FOREIGN KEY (chat_id) REFERENCES chats (client_id) ON DELETE CASCADE
+                    )
+                """)
+
+            # Создаем таблицу для хранения оценок чата
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_ratings (
+                    chat_id INTEGER PRIMARY KEY,
+                    rating INTEGER NOT NULL,
+                    comment TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (chat_id) REFERENCES chats (client_id) ON DELETE CASCADE
+                )
+            """)
+
+            # Создаем таблицу для хранения информации о менеджерах
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS managers (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT,
+                    is_admin BOOLEAN DEFAULT FALSE,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    is_available BOOLEAN DEFAULT TRUE,
+                    active_chats INTEGER DEFAULT 0,
+                    total_chats INTEGER DEFAULT 0,
+                    rating REAL DEFAULT 0,
+                    last_activity DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
             conn.commit()
+            logger.info("Database tables created or already exist")
         except sqlite3.Error as e:
-            logger.error(f"Error creating tables: {e}")
+            logger.error(f"Database error: {e}")
+            conn.rollback()
             raise
-        finally:
-            conn.close()
-            delattr(self._local, 'connection')
 
     def get_all_cities(self) -> list[str]:
         """Получение списка всех городов"""
@@ -403,14 +354,29 @@ class Database:
         """Создание нового чата"""
         conn, cursor = self._get_connection()
         try:
-            cursor.execute(
-                "INSERT OR REPLACE INTO chats (client_id, username, is_active) VALUES (?, ?, ?)",
-                (client_id, username, False)
-            )
+            # Проверяем, существует ли уже запись для этого пользователя
+            cursor.execute("SELECT * FROM chats WHERE client_id = ?", (client_id,))
+            existing_chat = cursor.fetchone()
+            
+            if existing_chat:
+                # Если запись уже существует, обновляем только username и статус, 
+                # не затрагивая другие поля
+                cursor.execute(
+                    "UPDATE chats SET username = ?, is_active = FALSE WHERE client_id = ?",
+                    (username, client_id)
+                )
+            else:
+                # Если записи нет, создаем новую
+                cursor.execute(
+                    "INSERT INTO chats (client_id, username, is_active) VALUES (?, ?, ?)",
+                    (client_id, username, False)
+                )
+            
             conn.commit()
+            logger.info(f"Chat created or updated for user {username} (ID: {client_id})")
             return True
         except sqlite3.Error as e:
-            print(f"Ошибка создания чата: {e}")
+            logger.error(f"Error creating chat: {e}")
             return False
         finally:
             conn.close()
@@ -543,7 +509,7 @@ class Database:
             conn.close()
             delattr(self._local, 'connection')
 
-    def add_item(self, street_id: int, name: str, address: str, weekdays_time: str, 
+    def add_item(self, street_id: int, name: str, address: str, weekdays_time: str,
                  weekend_time: str, contact: str, geo_link: str, category: str) -> bool:
         """Добавление нового объекта"""
         conn, cursor = self._get_connection()
@@ -666,6 +632,95 @@ class Database:
             conn.close()
             delattr(self._local, 'connection')
 
+    def save_message(self, chat_id: int, sender_id: int, message_text: str, 
+                    message_type: str = 'text', file_id: str = None) -> bool:
+        """Сохраняет сообщение в истории чата
+        
+        Args:
+            chat_id: ID чата (client_id)
+            sender_id: ID отправителя
+            message_text: Текст сообщения
+            message_type: Тип сообщения ('text', 'photo', 'video', 'document', 'audio')
+            file_id: ID файла в Telegram (для медиа-сообщений)
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO messages 
+                (chat_id, sender_id, message_text, message_type, file_id)
+                VALUES (?, ?, ?, ?, ?)
+                """, 
+                (chat_id, sender_id, message_text, message_type, file_id)
+            )
+            conn.commit()
+            logger.info(f"Message saved for chat {chat_id} from user {sender_id}")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error saving message: {e}")
+            conn.rollback()
+            return False
+
+    def get_chat_history(self, chat_id: int, limit: int = 50) -> list:
+        """Получает историю сообщений для чата с ограничением по количеству"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                SELECT id, sender_id, message_text, message_type, file_id, timestamp, is_read
+                FROM messages
+                WHERE chat_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (chat_id, limit)
+            )
+            messages = cursor.fetchall()
+            # Возвращаем в порядке от старых к новым
+            return list(reversed(messages))
+        except sqlite3.Error as e:
+            logger.error(f"Error retrieving chat history: {e}")
+            return []
+
+    def mark_messages_as_read(self, chat_id: int, user_id: int) -> bool:
+        """Отмечает все сообщения к пользователю как прочитанные"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                UPDATE messages
+                SET is_read = TRUE
+                WHERE chat_id = ? AND sender_id != ? AND is_read = FALSE
+                """,
+                (chat_id, user_id)
+            )
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error marking messages as read: {e}")
+            conn.rollback()
+            return False
+
+    def get_unread_messages_count(self, chat_id: int, user_id: int) -> int:
+        """Возвращает количество непрочитанных сообщений для пользователя"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM messages
+                WHERE chat_id = ? AND sender_id != ? AND is_read = FALSE
+                """,
+                (chat_id, user_id)
+            )
+            return cursor.fetchone()[0]
+        except sqlite3.Error as e:
+            logger.error(f"Error counting unread messages: {e}")
+            return 0
+
     def __del__(self):
         """Закрытие соединения при удалении объекта"""
         try:
@@ -680,16 +735,364 @@ class Database:
         conn, cursor = self._get_connection()
         try:
             cursor.execute("""
-                SELECT COUNT(DISTINCT manager_id) 
-                FROM chats 
-                WHERE is_active = TRUE
+                SELECT COUNT(*)
+                FROM managers
+                WHERE is_active = TRUE AND is_available = TRUE
             """)
-            busy_managers = cursor.fetchone()[0] or 0
-            logger.info(f"Number of busy managers: {busy_managers}")
-            return max(0, 3 - busy_managers)  # Предполагаем, что всего 3 менеджера
+            available_managers = cursor.fetchone()[0] or 0
+            logger.info(f"Number of available managers: {available_managers}")
+            return available_managers
         except sqlite3.Error as e:
             logger.error(f"Error getting available managers count: {e}")
             return 0
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+
+    def save_chat_rating(self, chat_id: int, rating: int, comment: str = None) -> bool:
+        """Сохраняет оценку чата
+        
+        Args:
+            chat_id: ID чата (client_id)
+            rating: Оценка от 1 до 5
+            comment: Комментарий к оценке (опционально)
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO chat_ratings 
+                (chat_id, rating, comment)
+                VALUES (?, ?, ?)
+                """, 
+                (chat_id, rating, comment)
+            )
+            conn.commit()
+            logger.info(f"Rating saved for chat {chat_id}: {rating}")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error saving rating: {e}")
+            conn.rollback()
+            return False
+            
+    def get_chat_rating(self, chat_id: int) -> tuple:
+        """Получает оценку чата
+        
+        Args:
+            chat_id: ID чата (client_id)
+            
+        Returns:
+            tuple: (rating, comment, timestamp) или None
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                SELECT rating, comment, timestamp
+                FROM chat_ratings
+                WHERE chat_id = ?
+                """,
+                (chat_id,)
+            )
+            return cursor.fetchone()
+        except sqlite3.Error as e:
+            logger.error(f"Error retrieving chat rating: {e}")
+            return None
+
+    def add_manager(self, manager_id: int, name: str = None, is_admin: bool = False) -> bool:
+        """Добавляет нового менеджера
+        
+        Args:
+            manager_id: ID менеджера
+            name: Имя менеджера (опционально)
+            is_admin: Является ли менеджер администратором
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO managers 
+                (id, name, is_admin, active_chats, total_chats)
+                VALUES (?, ?, ?, 
+                    (SELECT active_chats FROM managers WHERE id = ?), 
+                    (SELECT total_chats FROM managers WHERE id = ?))
+                """, 
+                (manager_id, name, is_admin, manager_id, manager_id)
+            )
+            conn.commit()
+            logger.info(f"Added manager: {manager_id} ({name})")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error adding manager: {e}")
+            conn.rollback()
+            return False
+    
+    def set_manager_availability(self, manager_id: int, is_available: bool) -> bool:
+        """Устанавливает доступность менеджера для новых чатов
+        
+        Args:
+            manager_id: ID менеджера
+            is_available: Доступен ли менеджер для новых чатов
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                UPDATE managers
+                SET is_available = ?, last_activity = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, 
+                (is_available, manager_id)
+            )
+            conn.commit()
+            logger.info(f"Manager {manager_id} availability set to {is_available}")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error setting manager availability: {e}")
+            conn.rollback()
+            return False
+    
+    def update_manager_activity(self, manager_id: int) -> bool:
+        """Обновляет время последней активности менеджера
+        
+        Args:
+            manager_id: ID менеджера
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                UPDATE managers
+                SET last_activity = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, 
+                (manager_id,)
+            )
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error updating manager activity: {e}")
+            conn.rollback()
+            return False
+    
+    def get_available_manager(self) -> int:
+        """Получает ID доступного менеджера с наименьшим количеством активных чатов
+        
+        Returns:
+            int: ID менеджера или 0, если нет доступных менеджеров
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                SELECT id
+                FROM managers
+                WHERE is_active = TRUE AND is_available = TRUE
+                ORDER BY active_chats ASC, last_activity ASC
+                LIMIT 1
+                """
+            )
+            result = cursor.fetchone()
+            return result[0] if result else 0
+        except sqlite3.Error as e:
+            logger.error(f"Error getting available manager: {e}")
+            return 0
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def increment_manager_active_chats(self, manager_id: int) -> bool:
+        """Увеличивает счетчик активных чатов менеджера
+        
+        Args:
+            manager_id: ID менеджера
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                UPDATE managers
+                SET active_chats = active_chats + 1, 
+                    total_chats = total_chats + 1,
+                    last_activity = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, 
+                (manager_id,)
+            )
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error incrementing manager active chats: {e}")
+            conn.rollback()
+            return False
+    
+    def decrement_manager_active_chats(self, manager_id: int) -> bool:
+        """Уменьшает счетчик активных чатов менеджера
+        
+        Args:
+            manager_id: ID менеджера
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                UPDATE managers
+                SET active_chats = MAX(0, active_chats - 1), 
+                    last_activity = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, 
+                (manager_id,)
+            )
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error decrementing manager active chats: {e}")
+            conn.rollback()
+            return False
+            
+    def get_manager_stats(self, manager_id: int) -> tuple:
+        """Получает статистику менеджера
+        
+        Args:
+            manager_id: ID менеджера
+            
+        Returns:
+            tuple: (active_chats, total_chats, rating) или None
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                SELECT active_chats, total_chats, rating
+                FROM managers
+                WHERE id = ?
+                """,
+                (manager_id,)
+            )
+            return cursor.fetchone()
+        except sqlite3.Error as e:
+            logger.error(f"Error getting manager stats: {e}")
+            return None
+
+    def get_active_chat_by_client_id(self, client_id: int) -> Optional[tuple]:
+        """Получение информации о чате по ID клиента"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                "SELECT * FROM chats WHERE client_id = ? AND is_active = TRUE",
+                (client_id,)
+            )
+            return cursor.fetchone()
+        except sqlite3.Error as e:
+            logger.error(f"Error getting active chat by client ID: {e}")
+            return None
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+
+    def save_client_contact_info(self, client_id: int, name: str, phone: str, nickname: str) -> bool:
+        """Сохранение контактной информации клиента"""
+        conn, cursor = self._get_connection()
+        try:
+            # Проверяем существование полей в таблице
+            cursor.execute("PRAGMA table_info(chats)")
+            columns = {column[1] for column in cursor.fetchall()}
+            
+            # Логируем информацию о структуре таблицы для отладки
+            logger.info(f"Columns in chats table: {columns}")
+            
+            # Проверяем наличие нужных полей в таблице
+            required_fields = ['client_name', 'client_phone', 'client_nickname']
+            missing_fields = [field for field in required_fields if field not in columns]
+            
+            if missing_fields:
+                logger.error(f"Missing fields in chats table: {missing_fields}")
+                # Пытаемся добавить недостающие поля
+                for field in missing_fields:
+                    try:
+                        cursor.execute(f"ALTER TABLE chats ADD COLUMN {field} TEXT")
+                        logger.info(f"Added missing field: {field}")
+                    except sqlite3.Error as e:
+                        logger.error(f"Error adding field {field}: {e}")
+            
+            # Проверяем наличие записи для этого пользователя
+            cursor.execute("SELECT COUNT(*) FROM chats WHERE client_id = ?", (client_id,))
+            count = cursor.fetchone()[0]
+            
+            if count == 0:
+                # Если записи нет, создаем новую
+                logger.info(f"No record exists for client {client_id}, creating new one")
+                cursor.execute(
+                    "INSERT INTO chats (client_id, username, is_active, client_name, client_phone, client_nickname) VALUES (?, '', FALSE, ?, ?, ?)",
+                    (client_id, name, phone, nickname)
+                )
+            else:
+                # Если запись есть, обновляем ее
+                logger.info(f"Updating contact info for client {client_id}")
+                cursor.execute(
+                    "UPDATE chats SET client_name = ?, client_phone = ?, client_nickname = ? WHERE client_id = ?",
+                    (name, phone, nickname, client_id)
+                )
+            
+            conn.commit()
+            
+            # Проверяем успешность обновления
+            cursor.execute(
+                "SELECT client_name, client_phone, client_nickname FROM chats WHERE client_id = ?",
+                (client_id,)
+            )
+            result = cursor.fetchone()
+            if result:
+                logger.info(f"Contact info saved for client {client_id}: {result}")
+                return True
+            else:
+                logger.error(f"Failed to save contact info for client {client_id} - record not found after update")
+                return False
+        except sqlite3.Error as e:
+            logger.error(f"SQLite error saving client contact info: {e}", exc_info=True)
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error saving client contact info: {e}", exc_info=True)
+            return False
+        finally:
+            try:
+                conn.close()
+                delattr(self._local, 'connection')
+            except Exception as e:
+                logger.error(f"Error closing connection: {e}")
+                # Не прерываем выполнение при ошибке закрытия соединения
+
+    def get_client_contact_info(self, client_id: int) -> Optional[Tuple[str, str, str]]:
+        """Получение контактной информации клиента"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                "SELECT client_name, client_phone, client_nickname FROM chats WHERE client_id = ?",
+                (client_id,)
+            )
+            result = cursor.fetchone()
+            return result if result else None
+        except sqlite3.Error as e:
+            logger.error(f"Error getting client contact info: {e}")
+            return None
         finally:
             conn.close()
             delattr(self._local, 'connection')
