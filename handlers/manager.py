@@ -1,6 +1,13 @@
 from aiogram import types, Bot
 from database import Database
-from keyboards import get_chat_keyboard, get_main_keyboard, get_manager_status_keyboard
+from keyboards import (
+    get_chat_keyboard, 
+    get_main_keyboard, 
+    get_manager_status_keyboard,
+    get_active_chats_keyboard,
+    get_chat_transfer_keyboard,
+    get_extended_chat_keyboard
+)
 
 
 async def handle_accept_chat(message: types.Message, bot: Bot, db: Database, managers_list: list):
@@ -72,21 +79,8 @@ async def handle_accept_chat(message: types.Message, bot: Bot, db: Database, man
         # Уведомляем менеджера
         await message.answer(
             f"Вы подключились к чату с клиентом {username}",
-            reply_markup=get_chat_keyboard()
+            reply_markup=get_extended_chat_keyboard()
         )
-        
-        # Отправляем уведомление другим менеджерам, что чат уже занят
-        for other_manager_id in managers_list:
-            if other_manager_id != manager_id:
-                try:
-                    await bot.send_message(
-                        other_manager_id,
-                        f"Чат с пользователем {username} уже принят другим менеджером."
-                    )
-                except Exception:
-                    pass  # Игнорируем ошибки при отправке уведомлений
-    else:
-        await message.answer("Не удалось подключиться к чату")
 
 
 async def handle_manager_status(message: types.Message, db: Database):
@@ -125,4 +119,173 @@ async def handle_set_availability(message: types.Message, db: Database, availabl
         await message.answer(
             "Не удалось изменить ваш статус",
             reply_markup=get_main_keyboard()
+        )
+
+
+async def handle_manager_active_chats(message: types.Message, db: Database):
+    """Обработчик для отображения активных чатов менеджера"""
+    manager_id = message.from_user.id
+    
+    active_chats = db.get_active_chats_by_manager(manager_id)
+    
+    if not active_chats:
+        await message.answer(
+            "У вас нет активных чатов",
+            reply_markup=get_manager_status_keyboard()
+        )
+        return
+    
+    await message.answer(
+        f"У вас {len(active_chats)} активных чатов:",
+        reply_markup=get_active_chats_keyboard(active_chats)
+    )
+
+
+async def handle_chat_selection(message: types.Message, db: Database):
+    """Обработчик для выбора чата из списка"""
+    manager_id = message.from_user.id
+    
+    # Извлекаем имя клиента из текста кнопки
+    text = message.text
+    if not text.startswith("Чат с "):
+        return
+    
+    client_info = text.replace("Чат с ", "")
+    
+    # Ищем клиента по имени и телефону
+    active_chats = db.get_active_chats_by_manager(manager_id)
+    target_client_id = None
+    
+    for chat in active_chats:
+        client_id, username, client_name, client_phone = chat
+        display_name = client_name if client_name else username
+        display_text = f"{display_name}"
+        if client_phone:
+            display_text += f" ({client_phone})"
+        
+        if display_text == client_info:
+            target_client_id = client_id
+            break
+    
+    if not target_client_id:
+        await message.answer(
+            "Чат не найден или уже завершен",
+            reply_markup=get_manager_status_keyboard()
+        )
+        return
+    
+    # Показываем клавиатуру чата
+    await message.answer(
+        f"Вы в чате с клиентом {client_info}",
+        reply_markup=get_extended_chat_keyboard()
+    )
+
+
+async def handle_transfer_chat_request(message: types.Message, db: Database):
+    """Обработчик для запроса на передачу чата другому менеджеру"""
+    manager_id = message.from_user.id
+    
+    # Проверяем, есть ли у менеджера активный чат
+    active_chat = db.get_active_chat(manager_id)
+    if not active_chat:
+        await message.answer(
+            "У вас нет активного чата для передачи",
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
+    # Получаем список доступных менеджеров
+    managers = db.get_all_managers()
+    available_managers = [m for m in managers if m[0] != manager_id]
+    
+    if not available_managers:
+        await message.answer(
+            "Нет доступных менеджеров для передачи чата",
+            reply_markup=get_extended_chat_keyboard()
+        )
+        return
+    
+    await message.answer(
+        "Выберите менеджера для передачи чата:",
+        reply_markup=get_chat_transfer_keyboard(available_managers)
+    )
+
+
+async def handle_transfer_chat(message: types.Message, bot: Bot, db: Database):
+    """Обработчик для передачи чата другому менеджеру"""
+    manager_id = message.from_user.id
+    
+    # Проверяем, есть ли у менеджера активный чат
+    active_chat = db.get_active_chat(manager_id)
+    if not active_chat:
+        await message.answer(
+            "У вас нет активного чата для передачи",
+            reply_markup=get_main_keyboard()
+        )
+        return
+    
+    client_id = active_chat[0]
+    
+    # Извлекаем ID нового менеджера из текста кнопки
+    text = message.text
+    if not text.startswith("Передать: "):
+        return
+    
+    # Получаем список всех менеджеров
+    managers = db.get_all_managers()
+    
+    # Ищем нового менеджера по тексту кнопки
+    new_manager_id = None
+    for manager in managers:
+        manager_id_from_db, name, is_admin, is_available, active_chats = manager
+        if manager_id_from_db == manager_id:
+            continue  # Пропускаем текущего менеджера
+            
+        display_name = name if name else f"ID: {manager_id_from_db}"
+        status = "👑 " if is_admin else ""
+        status += f"({active_chats} чатов)"
+        button_text = f"Передать: {status} {display_name}"
+        
+        if button_text == text:
+            new_manager_id = manager_id_from_db
+            break
+    
+    if not new_manager_id:
+        await message.answer(
+            "Менеджер не найден",
+            reply_markup=get_extended_chat_keyboard()
+        )
+        return
+    
+    # Передаем чат новому менеджеру
+    if db.transfer_chat(client_id, new_manager_id):
+        # Получаем имя клиента
+        client_contact = db.get_client_contact_info(client_id)
+        client_name = client_contact[0] if client_contact and client_contact[0] else "Клиент"
+        
+        # Получаем имя нового менеджера
+        new_manager_name = db.get_manager_name(new_manager_id) or "Менеджер"
+        
+        # Уведомляем клиента о смене менеджера
+        await bot.send_message(
+            client_id,
+            f"Ваш чат был передан другому менеджеру: {new_manager_name}"
+        )
+        
+        # Уведомляем нового менеджера
+        await bot.send_message(
+            new_manager_id,
+            f"Вам передан чат с клиентом {client_name}",
+            reply_markup=get_extended_chat_keyboard()
+        )
+        
+        # Уведомляем текущего менеджера
+        await message.answer(
+            f"Чат с клиентом {client_name} успешно передан менеджеру {new_manager_name}",
+            reply_markup=get_main_keyboard()
+        )
+    else:
+        await message.answer(
+            "Не удалось передать чат",
+            reply_markup=get_extended_chat_keyboard()
         )

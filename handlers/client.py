@@ -5,7 +5,8 @@ from keyboards import (
     get_chat_keyboard, 
     get_manager_keyboard, 
     get_rating_keyboard,
-    get_share_contact_keyboard
+    get_share_contact_keyboard,
+    get_admin_keyboard
 )
 import logging
 from datetime import datetime
@@ -21,19 +22,31 @@ async def handle_start(message: types.Message, config=None, db=None):
     is_manager = config and user_id in config.config.managers
     
     if is_manager:
-        # Если это менеджер, показываем меню с опцией управления статусом
-        keyboard = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="Контакты")],
-                [KeyboardButton(text="Статус менеджера")]
-            ],
-            resize_keyboard=True
-        )
-        await message.answer(
-            "Добро пожаловать в панель управления менеджера! "
-            "Выберите нужное действие ниже.",
-            reply_markup=keyboard
-        )
+        # Проверяем, является ли менеджер администратором
+        is_admin = db and db.is_admin(user_id)
+        
+        if is_admin:
+            # Если это администратор, показываем меню с опцией администратора
+            await message.answer(
+                "Добро пожаловать, Администратор! "
+                "Выберите нужное действие ниже:",
+                reply_markup=get_admin_keyboard()
+            )
+        else:
+            # Обычное меню для менеджера
+            keyboard = ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text="Каталог")],
+                    [KeyboardButton(text="Контакты")],
+                    [KeyboardButton(text="Статус менеджера")]
+                ],
+                resize_keyboard=True
+            )
+            await message.answer(
+                "Добро пожаловать в панель управления менеджера! "
+                "Выберите нужное действие ниже.",
+                reply_markup=keyboard
+            )
     else:
         # Проверяем, есть ли пользователь в базе данных
         client_info = None

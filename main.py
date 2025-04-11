@@ -17,7 +17,19 @@ from handlers.client import (
 from handlers.manager import (
     handle_accept_chat, 
     handle_manager_status, 
-    handle_set_availability
+    handle_set_availability,
+    handle_manager_active_chats,
+    handle_chat_selection,
+    handle_transfer_chat_request,
+    handle_transfer_chat
+)
+from handlers.admin import (
+    handle_admin_panel,
+    handle_admin_stats,
+    handle_admin_pending_chats,
+    handle_admin_active_chats,
+    handle_admin_managers,
+    handle_admin_take_chat
 )
 from handlers.common import handle_close_chat, handle_message
 from handlers.contacts import (
@@ -26,6 +38,17 @@ from handlers.contacts import (
     handle_city_selection,
     handle_back_to_cities,
     handle_street_selection
+)
+from handlers.catalog import (
+    handle_catalog,
+    handle_category_selection,
+    handle_subcategory_selection,
+    handle_type_selection,
+    handle_size_selection,
+    handle_back_to_categories,
+    handle_back_to_subcategories,
+    handle_back_from_sizes,
+    user_catalog_selections
 )
 from utils.logger import logger
 
@@ -57,6 +80,63 @@ async def cmd_start(message: types.Message):
 @dp.message(lambda message: message.text == "Контакты")
 async def contacts(message: types.Message):
     await handle_contacts(message, db)
+
+
+@dp.message(lambda message: message.text == "Каталог")
+async def catalog(message: types.Message):
+    await handle_catalog(message, db)
+
+
+@dp.message(lambda message: message.text in db.get_product_categories() if hasattr(db, 'get_product_categories') else False)
+async def category_selection(message: types.Message):
+    await handle_category_selection(message, db)
+
+
+@dp.message(lambda message: message.text == "Назад к категориям")
+async def back_to_categories(message: types.Message):
+    await handle_back_to_categories(message, db)
+
+
+@dp.message(lambda message: message.text in (
+    db.get_product_subcategories(user_catalog_selections.get(message.from_user.id, {}).get('category', '')) 
+    if hasattr(db, 'get_product_subcategories') and message.from_user.id in user_catalog_selections 
+    else []
+))
+async def subcategory_selection(message: types.Message):
+    await handle_subcategory_selection(message, db)
+
+
+@dp.message(lambda message: message.text == "Назад к подкатегориям")
+async def back_to_subcategories(message: types.Message):
+    await handle_back_to_subcategories(message, db)
+
+
+@dp.message(lambda message: message.text in (
+    db.get_product_types(
+        user_catalog_selections.get(message.from_user.id, {}).get('category', ''),
+        user_catalog_selections.get(message.from_user.id, {}).get('subcategory', '')
+    ) if hasattr(db, 'get_product_types') and message.from_user.id in user_catalog_selections 
+    else []
+))
+async def type_selection(message: types.Message):
+    await handle_type_selection(message, db)
+
+
+@dp.message(lambda message: message.text in (
+    db.get_product_sizes(
+        user_catalog_selections.get(message.from_user.id, {}).get('category', ''),
+        user_catalog_selections.get(message.from_user.id, {}).get('subcategory', ''),
+        user_catalog_selections.get(message.from_user.id, {}).get('type', None)
+    ) if hasattr(db, 'get_product_sizes') and message.from_user.id in user_catalog_selections 
+    else []
+))
+async def size_selection(message: types.Message):
+    await handle_size_selection(message, db)
+
+
+@dp.message(lambda message: message.text == "Назад" and message.from_user.id in user_catalog_selections)
+async def back_from_sizes(message: types.Message):
+    await handle_back_from_sizes(message, db)
 
 
 @dp.message(lambda message: message.text == "Назад")
@@ -132,6 +212,71 @@ async def add_rating_comment(message: types.Message):
 @dp.message(lambda message: message.text == "Главное меню")
 async def main_menu(message: types.Message):
     await handle_start(message, config, db)
+
+
+@dp.message(lambda message: message.text == "Доступен для чатов")
+async def set_available(message: types.Message):
+    await handle_set_availability(message, db, True)
+
+
+@dp.message(lambda message: message.text == "Недоступен для чатов")
+async def set_unavailable(message: types.Message):
+    await handle_set_availability(message, db, False)
+
+
+@dp.message(lambda message: message.text == "Статус менеджера")
+async def manager_status(message: types.Message):
+    await handle_manager_status(message, db)
+
+
+@dp.message(lambda message: message.text == "Активные чаты" and message.from_user.id in config.config.managers)
+async def manager_active_chats(message: types.Message):
+    await handle_manager_active_chats(message, db)
+
+
+@dp.message(lambda message: message.text == "Передать другому менеджеру")
+async def transfer_chat_request(message: types.Message):
+    await handle_transfer_chat_request(message, db)
+
+
+@dp.message(lambda message: message.text.startswith("Передать: "))
+async def transfer_chat(message: types.Message):
+    await handle_transfer_chat(message, bot, db)
+
+
+@dp.message(lambda message: message.text.startswith("Чат с "))
+async def chat_selection(message: types.Message):
+    await handle_chat_selection(message, db)
+
+
+@dp.message(lambda message: message.text == "Панель администратора" and db.is_admin(message.from_user.id))
+async def admin_panel(message: types.Message):
+    await handle_admin_panel(message, db)
+
+
+@dp.message(lambda message: message.text == "Статистика" and db.is_admin(message.from_user.id))
+async def admin_stats(message: types.Message):
+    await handle_admin_stats(message, db)
+
+
+@dp.message(lambda message: message.text == "Ожидающие чаты" and db.is_admin(message.from_user.id))
+async def admin_pending_chats(message: types.Message):
+    await handle_admin_pending_chats(message, db)
+
+
+@dp.message(lambda message: message.text == "Активные чаты" and db.is_admin(message.from_user.id))
+async def admin_active_chats(message: types.Message):
+    await handle_admin_active_chats(message, db)
+
+
+@dp.message(lambda message: message.text == "Управление менеджерами" and db.is_admin(message.from_user.id))
+async def admin_managers(message: types.Message):
+    await handle_admin_managers(message, db)
+
+
+@dp.message(lambda message: message.text.startswith("Взять чат с ") and db.is_admin(message.from_user.id))
+async def admin_take_chat(message: types.Message):
+    await handle_admin_take_chat(message, bot, db)
 
 
 # Общий обработчик должен быть последним

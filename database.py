@@ -31,7 +31,8 @@ class Database:
                     username TEXT,
                     client_name TEXT,
                     client_phone TEXT,
-                    client_nickname TEXT
+                    client_nickname TEXT,
+                    status TEXT DEFAULT 'pending'
                 )
             """)
 
@@ -52,6 +53,20 @@ class Database:
                 except sqlite3.Error as e:
                     logger.error(f"Ошибка при добавлении полей в таблицу chats: {e}")
                     # Продолжаем выполнение, так как поля могут уже существовать
+            
+            # Проверяем наличие поля status в таблице chats
+            if 'client_id' in columns and 'status' not in columns:
+                logger.info("Обновление структуры таблицы chats, добавление поля status...")
+                try:
+                    cursor.execute("ALTER TABLE chats ADD COLUMN status TEXT DEFAULT 'pending'")
+                    # Обновляем статусы существующих чатов
+                    cursor.execute("UPDATE chats SET status = 'active' WHERE is_active = TRUE")
+                    cursor.execute("UPDATE chats SET status = 'pending' WHERE is_active = FALSE AND manager_id IS NULL")
+                    cursor.execute("UPDATE chats SET status = 'closed' WHERE is_active = FALSE AND manager_id IS NOT NULL")
+                    conn.commit()
+                    logger.info("Поле status успешно добавлено в таблицу chats")
+                except sqlite3.Error as e:
+                    logger.error(f"Ошибка при добавлении поля status в таблицу chats: {e}")
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS cities (
@@ -314,6 +329,24 @@ class Database:
                 )
             """)
 
+            # Создаем таблицу для хранения товаров
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS products (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT NOT NULL,
+                    subcategory TEXT NOT NULL,
+                    type TEXT,
+                    size TEXT NOT NULL,
+                    product_name TEXT,
+                    description TEXT,
+                    price TEXT,
+                    external_url TEXT NOT NULL,
+                    image_url TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             conn.commit()
             logger.info("Database tables created or already exist")
         except sqlite3.Error as e:
@@ -351,29 +384,22 @@ class Database:
             delattr(self._local, 'connection')
 
     def create_chat(self, client_id: int, username: str) -> bool:
-        """Создание нового чата"""
+        """Создание или обновление чата"""
         conn, cursor = self._get_connection()
         try:
-            # Проверяем, существует ли уже запись для этого пользователя
-            cursor.execute("SELECT * FROM chats WHERE client_id = ?", (client_id,))
-            existing_chat = cursor.fetchone()
-            
-            if existing_chat:
-                # Если запись уже существует, обновляем только username и статус, 
-                # не затрагивая другие поля
-                cursor.execute(
-                    "UPDATE chats SET username = ?, is_active = FALSE WHERE client_id = ?",
-                    (username, client_id)
-                )
-            else:
-                # Если записи нет, создаем новую
-                cursor.execute(
-                    "INSERT INTO chats (client_id, username, is_active) VALUES (?, ?, ?)",
-                    (client_id, username, False)
-                )
-            
+            cursor.execute(
+                """
+                INSERT INTO chats (client_id, username, is_active, status) 
+                VALUES (?, ?, FALSE, 'pending')
+                ON CONFLICT(client_id) DO UPDATE SET username = ?, status = CASE
+                    WHEN status = 'closed' THEN 'pending'
+                    ELSE status
+                END
+                """,
+                (client_id, username, username)
+            )
             conn.commit()
-            logger.info(f"Chat created or updated for user {username} (ID: {client_id})")
+            logger.info(f"Chat created/updated for client {client_id}")
             return True
         except sqlite3.Error as e:
             logger.error(f"Error creating chat: {e}")
@@ -387,13 +413,14 @@ class Database:
         conn, cursor = self._get_connection()
         try:
             cursor.execute(
-                "UPDATE chats SET is_active = TRUE, manager_id = ? WHERE client_id = ?",
+                "UPDATE chats SET is_active = TRUE, manager_id = ?, status = 'active' WHERE client_id = ?",
                 (manager_id, client_id)
             )
             conn.commit()
+            logger.info(f"Chat activated: client={client_id}, manager={manager_id}")
             return True
         except sqlite3.Error as e:
-            print(f"Ошибка активации чата: {e}")
+            logger.error(f"Error activating chat: {e}")
             return False
         finally:
             conn.close()
@@ -413,15 +440,208 @@ class Database:
             if chat:
                 # Если чат найден, закрываем его
                 cursor.execute(
-                    "UPDATE chats SET is_active = FALSE, manager_id = NULL WHERE client_id = ?",
+                    "UPDATE chats SET is_active = FALSE, status = 'closed' WHERE client_id = ?",
                     (client_id,)
                 )
                 conn.commit()
+                logger.info(f"Chat closed: client={client_id}")
                 return True
+            logger.warning(f"No active chat found for client={client_id}")
             return False
         except sqlite3.Error as e:
-            print(f"Ошибка закрытия чата: {e}")
+            logger.error(f"Error closing chat: {e}")
             return False
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def transfer_chat(self, client_id: int, new_manager_id: int) -> bool:
+        """Передача чата другому менеджеру
+        
+        Args:
+            client_id: ID клиента
+            new_manager_id: ID нового менеджера
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            # Проверяем, существует ли активный чат
+            cursor.execute(
+                "SELECT manager_id FROM chats WHERE client_id = ? AND is_active = TRUE",
+                (client_id,)
+            )
+            chat = cursor.fetchone()
+            
+            if not chat:
+                logger.warning(f"No active chat found for client={client_id}")
+                return False
+                
+            old_manager_id = chat[0]
+            
+            # Переназначаем чат новому менеджеру
+            cursor.execute(
+                "UPDATE chats SET manager_id = ? WHERE client_id = ?",
+                (new_manager_id, client_id)
+            )
+            conn.commit()
+            
+            # Обновляем счетчики чатов
+            if old_manager_id:
+                self.decrement_manager_active_chats(old_manager_id)
+            self.increment_manager_active_chats(new_manager_id)
+            
+            logger.info(f"Chat transferred: client={client_id}, from_manager={old_manager_id}, to_manager={new_manager_id}")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error transferring chat: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+            
+    def get_chat_status(self, client_id: int) -> str:
+        """Получение статуса чата клиента
+        
+        Args:
+            client_id: ID клиента
+            
+        Returns:
+            str: Статус чата ('pending', 'active', 'closed') или None если чат не найден
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                "SELECT status FROM chats WHERE client_id = ?",
+                (client_id,)
+            )
+            result = cursor.fetchone()
+            return result[0] if result else None
+        except sqlite3.Error as e:
+            logger.error(f"Error getting chat status: {e}")
+            return None
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+            
+    def set_chat_status(self, client_id: int, status: str) -> bool:
+        """Изменение статуса чата
+        
+        Args:
+            client_id: ID клиента
+            status: Новый статус ('pending', 'active', 'closed')
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            # Обновляем is_active в зависимости от статуса
+            is_active = (status == 'active')
+            
+            cursor.execute(
+                "UPDATE chats SET status = ?, is_active = ? WHERE client_id = ?",
+                (status, is_active, client_id)
+            )
+            
+            # Если чат закрывается, сбрасываем manager_id
+            if status == 'closed':
+                cursor.execute(
+                    "SELECT manager_id FROM chats WHERE client_id = ?",
+                    (client_id,)
+                )
+                result = cursor.fetchone()
+                old_manager_id = result[0] if result else None
+                
+                if old_manager_id:
+                    # Уменьшаем счетчик чатов у менеджера
+                    self.decrement_manager_active_chats(old_manager_id)
+            
+            conn.commit()
+            logger.info(f"Chat status updated: client={client_id}, status={status}")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error setting chat status: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+            
+    def get_pending_chats(self) -> list:
+        """Получение списка ожидающих чатов
+        
+        Returns:
+            list: Список кортежей (client_id, username, client_name, client_phone, client_nickname)
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                SELECT client_id, username, client_name, client_phone, client_nickname
+                FROM chats 
+                WHERE status = 'pending'
+                ORDER BY client_id DESC
+                """
+            )
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error getting pending chats: {e}")
+            return []
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+            
+    def get_active_chats_by_manager(self, manager_id: int) -> list:
+        """Получение списка активных чатов менеджера
+        
+        Args:
+            manager_id: ID менеджера
+            
+        Returns:
+            list: Список кортежей (client_id, username, client_name, client_phone)
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                SELECT client_id, username, client_name, client_phone
+                FROM chats 
+                WHERE status = 'active' AND manager_id = ?
+                ORDER BY client_id DESC
+                """,
+                (manager_id,)
+            )
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error getting active chats for manager: {e}")
+            return []
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+            
+    def get_all_active_chats(self) -> list:
+        """Получение списка всех активных чатов
+        
+        Returns:
+            list: Список кортежей (client_id, username, client_name, client_phone, manager_id)
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                SELECT client_id, username, client_name, client_phone, manager_id
+                FROM chats 
+                WHERE status = 'active'
+                ORDER BY client_id DESC
+                """
+            )
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error getting all active chats: {e}")
+            return []
         finally:
             conn.close()
             delattr(self._local, 'connection')
@@ -1093,6 +1313,259 @@ class Database:
         except sqlite3.Error as e:
             logger.error(f"Error getting client contact info: {e}")
             return None
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+
+    # Методы для работы с каталогом товаров
+    def get_product_categories(self) -> list[str]:
+        """Получить все категории товаров"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute("SELECT DISTINCT category FROM products ORDER BY category")
+            return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting product categories: {e}")
+            return []
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def get_product_subcategories(self, category: str) -> list[str]:
+        """Получить все подкатегории для выбранной категории"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                "SELECT DISTINCT subcategory FROM products WHERE category = ? ORDER BY subcategory",
+                (category,)
+            )
+            return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting product subcategories: {e}")
+            return []
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def get_product_types(self, category: str, subcategory: str) -> list[str]:
+        """Получить все типы для выбранной категории и подкатегории"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                "SELECT DISTINCT type FROM products WHERE category = ? AND subcategory = ? AND type IS NOT NULL ORDER BY type",
+                (category, subcategory)
+            )
+            return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting product types: {e}")
+            return []
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def get_product_sizes(self, category: str, subcategory: str, type: str = None) -> list[str]:
+        """Получить все размеры для выбранной категории, подкатегории и типа (если применимо)"""
+        conn, cursor = self._get_connection()
+        try:
+            if type:
+                cursor.execute(
+                    "SELECT DISTINCT size FROM products WHERE category = ? AND subcategory = ? AND type = ? ORDER BY size",
+                    (category, subcategory, type)
+                )
+            else:
+                cursor.execute(
+                    "SELECT DISTINCT size FROM products WHERE category = ? AND subcategory = ? ORDER BY size",
+                    (category, subcategory)
+                )
+            return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting product sizes: {e}")
+            return []
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def get_products_by_params(self, category: str, subcategory: str, type: str = None, size: str = None) -> list[tuple]:
+        """Получить все товары, соответствующие фильтрам"""
+        conn, cursor = self._get_connection()
+        try:
+            query = "SELECT id, product_name, description, price, external_url, image_url FROM products WHERE category = ? AND subcategory = ?"
+            params = [category, subcategory]
+            
+            if type:
+                query += " AND type = ?"
+                params.append(type)
+            
+            if size:
+                query += " AND size = ?"
+                params.append(size)
+                
+            cursor.execute(query, params)
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error getting products: {e}")
+            return []
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def add_product(self, category: str, subcategory: str, size: str, external_url: str, 
+                   type: str = None, product_name: str = None, description: str = None, 
+                   price: str = None, image_url: str = None) -> bool:
+        """Добавить новый товар в каталог"""
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute("""
+                INSERT INTO products (category, subcategory, type, size, product_name, description, price, external_url, image_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (category, subcategory, type, size, product_name, description, price, external_url, image_url))
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error adding product: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+
+    def is_admin(self, user_id: int) -> bool:
+        """Проверяет, является ли пользователь администратором
+        
+        Args:
+            user_id: ID пользователя
+        
+        Returns:
+            bool: True если пользователь - администратор, иначе False
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                "SELECT is_admin FROM managers WHERE id = ?",
+                (user_id,)
+            )
+            result = cursor.fetchone()
+            return result and result[0] if result else False
+        except sqlite3.Error as e:
+            logger.error(f"Error checking admin status: {e}")
+            return False
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def get_all_managers(self) -> list:
+        """Получение списка всех менеджеров
+        
+        Returns:
+            list: Список кортежей (id, name, is_admin, is_available, active_chats)
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                """
+                SELECT id, name, is_admin, is_available, active_chats
+                FROM managers
+                ORDER BY is_admin DESC, active_chats ASC
+                """
+            )
+            return cursor.fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error getting managers list: {e}")
+            return []
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def get_manager_name(self, manager_id: int) -> str:
+        """Получение имени менеджера
+        
+        Args:
+            manager_id: ID менеджера
+            
+        Returns:
+            str: Имя менеджера или None если менеджер не найден
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                "SELECT name FROM managers WHERE id = ?",
+                (manager_id,)
+            )
+            result = cursor.fetchone()
+            return result[0] if result else None
+        except sqlite3.Error as e:
+            logger.error(f"Error getting manager name: {e}")
+            return None
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def update_manager_name(self, manager_id: int, name: str) -> bool:
+        """Обновляет имя менеджера
+        
+        Args:
+            manager_id: ID менеджера
+            name: Новое имя
+            
+        Returns:
+            bool: Успешность операции
+        """
+        conn, cursor = self._get_connection()
+        try:
+            cursor.execute(
+                "UPDATE managers SET name = ? WHERE id = ?",
+                (name, manager_id)
+            )
+            conn.commit()
+            logger.info(f"Manager name updated: id={manager_id}, name={name}")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error updating manager name: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+            delattr(self._local, 'connection')
+    
+    def get_dashboard_stats(self) -> dict:
+        """Получение статистики для панели администратора
+        
+        Returns:
+            dict: Словарь со статистикой:
+                - total_managers: общее количество менеджеров
+                - available_managers: количество доступных менеджеров
+                - pending_chats: количество ожидающих чатов
+                - active_chats: количество активных чатов
+        """
+        conn, cursor = self._get_connection()
+        try:
+            result = {}
+            
+            # Общее количество менеджеров
+            cursor.execute("SELECT COUNT(*) FROM managers")
+            result['total_managers'] = cursor.fetchone()[0]
+            
+            # Количество доступных менеджеров
+            cursor.execute("SELECT COUNT(*) FROM managers WHERE is_available = TRUE AND is_active = TRUE")
+            result['available_managers'] = cursor.fetchone()[0]
+            
+            # Количество ожидающих чатов
+            cursor.execute("SELECT COUNT(*) FROM chats WHERE status = 'pending'")
+            result['pending_chats'] = cursor.fetchone()[0]
+            
+            # Количество активных чатов
+            cursor.execute("SELECT COUNT(*) FROM chats WHERE status = 'active'")
+            result['active_chats'] = cursor.fetchone()[0]
+            
+            return result
+        except sqlite3.Error as e:
+            logger.error(f"Error getting dashboard stats: {e}")
+            return {
+                'total_managers': 0,
+                'available_managers': 0,
+                'pending_chats': 0,
+                'active_chats': 0
+            }
         finally:
             conn.close()
             delattr(self._local, 'connection')
