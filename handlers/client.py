@@ -531,6 +531,54 @@ async def handle_rating(message: types.Message, db: Database):
             await message.answer("Оценка должна быть от 1 до 5")
             return
         
+        # Получаем информацию о чате для логирования
+        active_chat = db.get_active_chat_by_client_id(user_id)
+        last_chat = None
+        
+        # Если чат все еще активен, используем его для логирования
+        if active_chat and active_chat[1]:
+            manager_id = active_chat[1]
+            
+            # Логируем оценку
+            try:
+                from utils.logger import ManagerMetrics
+                ManagerMetrics.log_rating_received(
+                    client_id=user_id,
+                    manager_id=manager_id,
+                    rating=rating
+                )
+            except Exception as e:
+                logger.error(f"Error logging rating: {e}")
+        else:
+            # Чат завершен, нужно найти последний чат пользователя
+            try:
+                # Получаем историю сообщений для определения менеджера
+                chat_history = db.get_chat_history(user_id, limit=10)
+                if chat_history:
+                    # Ищем сообщения от менеджера
+                    manager_ids = set()
+                    for msg in chat_history:
+                        sender_id = msg[2]
+                        if sender_id != user_id:  # Если отправитель не клиент, это менеджер
+                            manager_ids.add(sender_id)
+                    
+                    if manager_ids:
+                        # Берем первого найденного менеджера
+                        manager_id = next(iter(manager_ids))
+                        
+                        # Логируем оценку
+                        try:
+                            from utils.logger import ManagerMetrics
+                            ManagerMetrics.log_rating_received(
+                                client_id=user_id,
+                                manager_id=manager_id,
+                                rating=rating
+                            )
+                        except Exception as e:
+                            logger.error(f"Error logging rating for closed chat: {e}")
+            except Exception as e:
+                logger.error(f"Error finding manager for rating: {e}")
+        
         # Сохраняем оценку
         if db.save_chat_rating(user_id, rating):
             await message.answer(
@@ -573,9 +621,40 @@ async def handle_rating_comment(message: types.Message, db: Database):
         return
     
     rating = rating_data[0]
+    comment = message.text
+    
+    # Получаем информацию о чате для логирования
+    try:
+        # Получаем историю сообщений для определения менеджера
+        chat_history = db.get_chat_history(user_id, limit=10)
+        if chat_history:
+            # Ищем сообщения от менеджера
+            manager_ids = set()
+            for msg in chat_history:
+                sender_id = msg[2]
+                if sender_id != user_id:  # Если отправитель не клиент, это менеджер
+                    manager_ids.add(sender_id)
+            
+            if manager_ids:
+                # Берем первого найденного менеджера
+                manager_id = next(iter(manager_ids))
+                
+                # Логируем комментарий к оценке
+                try:
+                    from utils.logger import ManagerMetrics
+                    ManagerMetrics.log_rating_received(
+                        client_id=user_id,
+                        manager_id=manager_id,
+                        rating=rating,
+                        comment=comment
+                    )
+                except Exception as e:
+                    logger.error(f"Error logging rating comment: {e}")
+    except Exception as e:
+        logger.error(f"Error finding manager for rating comment: {e}")
     
     # Обновляем запись с комментарием
-    if db.save_chat_rating(user_id, rating, message.text):
+    if db.save_chat_rating(user_id, rating, comment):
         await message.answer(
             "Спасибо за ваш отзыв!",
             reply_markup=get_main_keyboard()

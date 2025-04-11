@@ -177,6 +177,7 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="Статистика")],
         [KeyboardButton(text="Ожидающие чаты"), KeyboardButton(text="Активные чаты")],
         [KeyboardButton(text="Управление менеджерами")],
+        [KeyboardButton(text="Отчеты")],
         [KeyboardButton(text="Главное меню")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)

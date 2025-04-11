@@ -8,6 +8,8 @@ from keyboards import (
     get_chat_transfer_keyboard,
     get_extended_chat_keyboard
 )
+from utils.logger import ManagerMetrics
+from datetime import datetime
 
 
 async def handle_accept_chat(message: types.Message, bot: Bot, db: Database, managers_list: list):
@@ -81,6 +83,32 @@ async def handle_accept_chat(message: types.Message, bot: Bot, db: Database, man
             f"Вы подключились к чату с клиентом {username}",
             reply_markup=get_extended_chat_keyboard()
         )
+
+        # Логируем принятие чата для аналитики
+        try:
+            # Получаем сообщения из чата для определения времени создания
+            chat_history = db.get_chat_history(client_id, limit=1)
+            if chat_history:
+                # Берем время первого сообщения как время создания чата
+                chat_start_time = datetime.fromisoformat(chat_history[-1][5].replace(' ', 'T'))
+                response_time = (datetime.now() - chat_start_time).total_seconds()
+                
+                # Логируем событие с временем отклика
+                ManagerMetrics.log_chat_accepted(
+                    client_id=client_id,
+                    manager_id=manager_id,
+                    response_time=response_time
+                )
+            else:
+                # Если история пуста, просто логируем принятие чата без времени отклика
+                ManagerMetrics.log_chat_accepted(
+                    client_id=client_id,
+                    manager_id=manager_id
+                )
+        except Exception as e:
+            # Если возникает ошибка при логировании, игнорируем её,
+            # чтобы не прерывать основной процесс
+            pass
 
 
 async def handle_manager_status(message: types.Message, db: Database):

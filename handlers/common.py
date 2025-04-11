@@ -3,6 +3,8 @@ from database import Database
 from keyboards import get_main_keyboard, get_rating_keyboard, get_chat_keyboard
 from handlers.client import handle_rate_chat_request
 import logging
+from utils.logger import ManagerMetrics
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +17,43 @@ async def handle_close_chat(message: types.Message, bot: Bot, db: Database, conf
         active_chat = db.get_active_chat(user_id)
         if active_chat:
             client_id = active_chat[0]  # client_id из БД
+            
+            # Получаем историю чата для вычисления длительности
+            try:
+                chat_history = db.get_chat_history(client_id, limit=100)
+                if chat_history:
+                    # Берем время первого сообщения с конца списка
+                    first_message_time = None
+                    for msg in reversed(chat_history):
+                        if msg[2] == user_id:  # Ищем первое сообщение менеджера
+                            first_message_time = datetime.fromisoformat(msg[5].replace(' ', 'T'))
+                            break
+                    
+                    if first_message_time:
+                        # Вычисляем длительность чата
+                        chat_duration = (datetime.now() - first_message_time).total_seconds()
+                        
+                        # Логируем закрытие чата с длительностью
+                        ManagerMetrics.log_chat_closed(
+                            client_id=client_id,
+                            manager_id=user_id,
+                            duration=chat_duration
+                        )
+                    else:
+                        # Если не нашли первое сообщение менеджера, просто логируем закрытие
+                        ManagerMetrics.log_chat_closed(
+                            client_id=client_id,
+                            manager_id=user_id
+                        )
+            except Exception as e:
+                logger.error(f"Error calculating chat duration: {e}")
+                # Логируем закрытие чата без длительности
+                ManagerMetrics.log_chat_closed(
+                    client_id=client_id,
+                    manager_id=user_id
+                )
+            
+            # Закрываем чат в базе данных
             db.close_chat(client_id)
             
             # Уменьшаем счетчик активных чатов менеджера
@@ -45,6 +84,43 @@ async def handle_close_chat(message: types.Message, bot: Bot, db: Database, conf
         if active_chat and db.close_chat(user_id):
             manager_id = active_chat[1]  # manager_id из БД
             
+            # Получаем историю чата для вычисления длительности
+            try:
+                if manager_id:
+                    chat_history = db.get_chat_history(user_id, limit=100)
+                    if chat_history:
+                        # Берем время первого сообщения с конца списка
+                        first_message_time = None
+                        for msg in reversed(chat_history):
+                            if msg[2] == manager_id:  # Ищем первое сообщение менеджера
+                                first_message_time = datetime.fromisoformat(msg[5].replace(' ', 'T'))
+                                break
+                        
+                        if first_message_time:
+                            # Вычисляем длительность чата
+                            chat_duration = (datetime.now() - first_message_time).total_seconds()
+                            
+                            # Логируем закрытие чата с длительностью
+                            ManagerMetrics.log_chat_closed(
+                                client_id=user_id,
+                                manager_id=manager_id,
+                                duration=chat_duration
+                            )
+                        else:
+                            # Если не нашли первое сообщение менеджера, просто логируем закрытие
+                            ManagerMetrics.log_chat_closed(
+                                client_id=user_id,
+                                manager_id=manager_id
+                            )
+            except Exception as e:
+                logger.error(f"Error calculating chat duration: {e}")
+                if manager_id:
+                    # Логируем закрытие чата без длительности
+                    ManagerMetrics.log_chat_closed(
+                        client_id=user_id,
+                        manager_id=manager_id
+                    )
+            
             # Уменьшаем счетчик активных чатов менеджера, если менеджер назначен
             if manager_id:
                 db.decrement_manager_active_chats(manager_id)
@@ -71,9 +147,9 @@ async def handle_close_chat(message: types.Message, bot: Bot, db: Database, conf
             )
 
 
-async def handle_message(message: types.Message, bot: Bot, db: Database, config):
+async def handle_message(message: types.Message, bot: Bot, db: Database, config=None):
     user_id = message.from_user.id
-    is_manager = user_id in config.config.managers
+    is_manager = config and user_id in config.config.managers
 
     # Определяем тип сообщения и извлекаем необходимые данные
     message_type = 'text'
@@ -93,6 +169,17 @@ async def handle_message(message: types.Message, bot: Bot, db: Database, config)
     
     # Продолжаем обработку только текстовых сообщений
     logger.info(f"Processing text message from user {user_id}")
+    
+    # Логируем отправленное сообщение для аналитики
+    try:
+        ManagerMetrics.log_message_sent(
+            chat_id=user_id,
+            sender_id=user_id,
+            is_manager=is_manager,
+            message_type=message_type
+        )
+    except Exception as e:
+        logger.error(f"Error logging message: {e}")
         
     if is_manager:
         # Обновляем активность менеджера

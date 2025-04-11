@@ -5,9 +5,12 @@ from keyboards import (
     get_admin_keyboard,
     get_pending_chats_keyboard,
     get_active_chats_keyboard,
-    get_managers_list_keyboard
+    get_managers_list_keyboard,
+    get_extended_chat_keyboard
 )
 import logging
+from utils.analytics import AnalyticsReporter
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -122,9 +125,30 @@ async def handle_admin_managers(message: types.Message, db: Database):
         )
         return
     
+    # Создаем клавиатуру со статистикой
+    keyboard = []
+    
+    for manager in managers:
+        manager_id, name, is_admin, is_available, active_chats = manager
+        manager_name = name or f"ID: {manager_id}"
+        status = "🟢 " if is_available else "🔴 "
+        admin_badge = "👑 " if is_admin else ""
+        
+        # Добавляем кнопку управления менеджером
+        keyboard.append([types.KeyboardButton(text=f"{admin_badge}{status}{manager_name} ({manager_id})")])
+        
+        # Добавляем кнопку статистики для этого менеджера
+        keyboard.append([types.KeyboardButton(text=f"Статистика: {manager_name} ({manager_id})")])
+    
+    # Добавляем кнопку возврата
+    keyboard.append([types.KeyboardButton(text="Панель администратора")])
+    
     await message.answer(
         f"Найдено {len(managers)} менеджеров:",
-        reply_markup=get_managers_list_keyboard(managers)
+        reply_markup=types.ReplyKeyboardMarkup(
+            keyboard=keyboard,
+            resize_keyboard=True
+        )
     )
 
 async def handle_admin_take_chat(message: types.Message, bot: Bot, db: Database):
@@ -194,7 +218,6 @@ async def handle_admin_take_chat(message: types.Message, bot: Bot, db: Database)
         db.save_message(target_client_id, user_id, greeting_message, 'text')
         
         # Уведомляем администратора
-        from keyboards import get_extended_chat_keyboard
         await message.answer(
             "Вы подключились к чату с клиентом.",
             reply_markup=get_extended_chat_keyboard()
@@ -203,4 +226,107 @@ async def handle_admin_take_chat(message: types.Message, bot: Bot, db: Database)
         await message.answer(
             "Не удалось подключиться к чату",
             reply_markup=get_admin_keyboard()
-        ) 
+        )
+
+async def handle_admin_manager_stats(message: types.Message, db: Database, config):
+    """Обработчик для отображения детальной статистики по менеджеру"""
+    user_id = message.from_user.id
+    
+    # Проверяем, является ли пользователь администратором
+    if not db.is_admin(user_id):
+        return
+    
+    # Извлекаем ID менеджера из текста кнопки
+    text = message.text
+    if not text.startswith("Статистика: "):
+        await message.answer(
+            "Неверный формат команды",
+            reply_markup=get_admin_keyboard()
+        )
+        return
+    
+    manager_info = text.replace("Статистика: ", "")
+    manager_id = int(manager_info.split("(")[1].split(")")[0])
+    
+    # Получаем базовую статистику менеджера из БД
+    manager_stats = db.get_manager_stats(manager_id)
+    if not manager_stats:
+        await message.answer(
+            "Не удалось получить статистику для этого менеджера",
+            reply_markup=get_admin_keyboard()
+        )
+        return
+    
+    active_chats, total_chats, rating = manager_stats
+    manager_name = db.get_manager_name(manager_id) or f"Менеджер {manager_id}"
+    
+    # Получаем расширенную статистику из аналитики
+    # За последние 7 дней
+    week_report = AnalyticsReporter.get_manager_performance_report(
+        config.db.database, manager_id=manager_id, days=7
+    )
+    
+    # За последние 30 дней
+    month_report = AnalyticsReporter.get_manager_performance_report(
+        config.db.database, manager_id=manager_id, days=30
+    )
+    
+    # Получаем отчет о времени отклика
+    response_report = AnalyticsReporter.get_response_time_report(days=30)
+    response_stats = None
+    
+    # Ищем менеджера в отчете о времени отклика
+    for manager_report in response_report:
+        if str(manager_report['manager_id']) == str(manager_id):
+            response_stats = manager_report
+            break
+    
+    # Формируем сообщение
+    stats_text = f"📊 *Статистика менеджера: {manager_name}*\n\n"
+    
+    # Текущие показатели
+    stats_text += "*Текущие показатели:*\n"
+    stats_text += f"• Активных чатов: {active_chats}\n"
+    stats_text += f"• Всего чатов: {total_chats}\n"
+    stats_text += f"• Рейтинг: {rating:.1f}/5.0\n\n"
+    
+    # Статистика за неделю
+    if week_report:
+        wr = week_report[0]
+        stats_text += "*Статистика за 7 дней:*\n"
+        stats_text += f"• Обработано чатов: {wr['total_chats']}\n"
+        stats_text += f"• Средний рейтинг: {wr['avg_rating']}/5.0 ({wr['rating_count']} оценок)\n"
+        stats_text += f"• Положительных оценок (4-5): {wr['positive_ratings']}\n"
+        stats_text += f"• Отрицательных оценок (1-2): {wr['negative_ratings']}\n\n"
+    
+    # Статистика за месяц
+    if month_report:
+        mr = month_report[0]
+        stats_text += "*Статистика за 30 дней:*\n"
+        stats_text += f"• Обработано чатов: {mr['total_chats']}\n"
+        stats_text += f"• Средний рейтинг: {mr['avg_rating']}/5.0 ({mr['rating_count']} оценок)\n"
+        stats_text += f"• Положительных оценок (4-5): {mr['positive_ratings']}\n"
+        stats_text += f"• Отрицательных оценок (1-2): {mr['negative_ratings']}\n\n"
+    
+    # Статистика времени отклика
+    if response_stats:
+        stats_text += "*Время отклика:*\n"
+        stats_text += f"• Среднее время: {response_stats['avg_response_time']} сек\n"
+        stats_text += f"• Минимальное время: {response_stats['min_response_time']} сек\n"
+        stats_text += f"• Максимальное время: {response_stats['max_response_time']} сек\n"
+        stats_text += f"• Количество ответов: {response_stats['response_count']}\n\n"
+    
+    # Добавляем кнопку "Полный отчет" для более детальной статистики
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text=f"Отчет: {manager_name} ({manager_id})")],
+            [types.KeyboardButton(text="Панель администратора")]
+        ],
+        resize_keyboard=True
+    )
+    
+    await message.answer(
+        stats_text,
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    ) 
